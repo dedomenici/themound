@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type PointerEvent } from "react";
 import { ACTS, sortActs, sortByStart, type Act } from "@/lib/mound-data";
 import { MOUND, WALKS } from "@/lib/mound-walks";
 import { asset } from "@/lib/static-host";
-import { useMapGestures } from "@/lib/map-gestures";
+import { fitView, layerTransform, lngToWorldX, latToWorldY, useSlippyMap } from "@/lib/map-gestures";
 
 function londonClock() {
   const parts = new Intl.DateTimeFormat("en-GB", {
@@ -377,55 +377,36 @@ function Profile({ act, day = "tonight" }: { act: Act; day?: "tonight" | "tomorr
   );
 }
 
-function project(lat: number, lng: number, zoom: number) {
-  const n = 2 ** zoom;
-  const x = ((lng + 180) / 360) * n * 256;
-  const rad = (lat * Math.PI) / 180;
-  const y = ((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) * n * 256;
-  return { x, y };
-}
-
 function WalkMap({ id, venue }: { id: string; venue: string }) {
   const walk = WALKS[id];
   const frame = useRef<HTMLDivElement>(null);
-  const [fit, setFit] = useState(0.45);
-  const zoom = !walk || walk.minutes > 20 ? 15 : 16;
   const points = walk
-    ? [project(MOUND.lat, MOUND.lng, zoom), ...walk.path.map(([lat, lng]) => project(lat, lng, zoom))]
-    : [];
-  const minX = points.length ? Math.min(...points.map((point) => point.x)) - 48 : 0;
-  const maxX = points.length ? Math.max(...points.map((point) => point.x)) + 48 : 1;
-  const minY = points.length ? Math.min(...points.map((point) => point.y)) - 48 : 0;
-  const maxY = points.length ? Math.max(...points.map((point) => point.y)) + 48 : 1;
-  const width = maxX - minX;
-  const height = maxY - minY;
-
-  useEffect(() => {
-    const el = frame.current;
-    if (!el) return;
-    const measure = () => setFit(el.clientWidth / width);
-    measure();
-    const watch = new ResizeObserver(measure);
-    watch.observe(el);
-    return () => watch.disconnect();
-  }, [width]);
-
-  const { zoom: userZoom, pan } = useMapGestures(frame, {
-    minZoom: 1,
-    maxZoom: 4,
+    ? [{ lat: MOUND.lat, lng: MOUND.lng }, ...walk.path.map(([lat, lng]) => ({ lat, lng }))]
+    : [{ lat: MOUND.lat, lng: MOUND.lng }];
+  const { zoom, setZoom, frame: size, view, project, minZoom, maxZoom } = useSlippyMap(frame, {
+    minZoom: 2,
+    maxZoom: 19,
     resetKey: id,
+    getInitialView: (box) => fitView(points, box.w, box.h, 0.2, walk && walk.minutes > 20 ? 15 : 16, 2, 19),
+    ignorePointer: (target) => Boolean((target as HTMLElement | null)?.closest?.("button")),
   });
 
   if (!walk) return null;
-  const tiles = [];
-  for (let tx = Math.floor(minX / 256); tx <= Math.floor(maxX / 256); tx += 1) {
-    for (let ty = Math.floor(minY / 256); ty <= Math.floor(maxY / 256); ty += 1) {
-      tiles.push({ tx, ty });
-    }
-  }
-  const line = points.map((point) => `${point.x - minX},${point.y - minY}`).join(" ");
-  const start = points[0];
-  const end = points[points.length - 1];
+  const width = size.w || 1;
+  const height = size.h || 1;
+  const worldPath = points.map((point) => ({
+    x: lngToWorldX(point.lng, view.zInt),
+    y: latToWorldY(point.lat, view.zInt),
+  }));
+  const minX = Math.min(...worldPath.map((point) => point.x));
+  const maxX = Math.max(...worldPath.map((point) => point.x));
+  const minY = Math.min(...worldPath.map((point) => point.y));
+  const maxY = Math.max(...worldPath.map((point) => point.y));
+  const line = worldPath.map((point) => `${point.x - minX},${point.y - minY}`).join(" ");
+  const start = project(points[0]);
+  const end = project(points[points.length - 1]);
+  const stroke = Math.max(2, 6 / view.scale);
+
   return (
     <figure className="mound-route">
       <div
@@ -433,35 +414,51 @@ function WalkMap({ id, venue }: { id: string; venue: string }) {
         ref={frame}
         role="application"
         aria-label={`${walk.minutes} minute walk from the top of the Mound to ${venue}. Drag to move, pinch or scroll to zoom.`}
-        style={{ height: Math.max(160, height * fit) }}
+        style={{ height: 240 }}
       >
         <div
+          data-map-layer="tiles"
+          data-tile-zoom={view.zInt}
           style={{
             position: "absolute",
-            inset: 0,
-            transform: `translate(${pan.x}px, ${pan.y}px) scale(${userZoom})`,
-            transformOrigin: "center center",
+            top: 0,
+            left: 0,
+            width: 0,
+            height: 0,
+            transform: layerTransform(view, width, height),
+            transformOrigin: "0 0",
           }}
         >
-        <div className="mound-route-sheet" style={{ width, height, transform: `scale(${fit})` }}>
-          {tiles.map((tile) => (
+          {view.tiles.map((tile) => (
             <img
-              key={`${tile.tx}-${tile.ty}`}
+              key={`${view.zInt}-${tile.left}-${tile.y}`}
               alt=""
-              src={`https://tile.openstreetmap.org/${zoom}/${tile.tx}/${tile.ty}.png`}
-              style={{ left: tile.tx * 256 - minX, top: tile.ty * 256 - minY }}
+              src={`https://tile.openstreetmap.org/${view.zInt}/${tile.x}/${tile.y}.png`}
+              style={{ left: tile.left, top: tile.top }}
             />
           ))}
-          <svg viewBox={`0 0 ${width} ${height}`} width={width} height={height}>
-            <polyline points={line} />
+          <svg
+            viewBox={`0 0 ${Math.max(1, maxX - minX)} ${Math.max(1, maxY - minY)}`}
+            width={Math.max(1, maxX - minX)}
+            height={Math.max(1, maxY - minY)}
+            style={{ position: "absolute", left: minX, top: minY, overflow: "visible" }}
+          >
+            <polyline points={line} strokeWidth={stroke} />
           </svg>
-          <span className="mound-pin start" style={{ left: start.x - minX, top: start.y - minY }}>
-            The Mound
-          </span>
-          <span className="mound-pin end" style={{ left: end.x - minX, top: end.y - minY }}>
-            {walk.minutes} min
-          </span>
         </div>
+        <span className="mound-pin start" style={{ left: start.left, top: start.top }}>
+          The Mound
+        </span>
+        <span className="mound-pin end" style={{ left: end.left, top: end.top }}>
+          {walk.minutes} min
+        </span>
+        <div className="mound-zoom">
+          <button type="button" aria-label="Zoom in" disabled={zoom >= maxZoom} onClick={() => setZoom(zoom + 1)}>
+            +
+          </button>
+          <button type="button" aria-label="Zoom out" disabled={zoom <= minZoom} onClick={() => setZoom(zoom - 1)}>
+            −
+          </button>
         </div>
       </div>
       <figcaption>
