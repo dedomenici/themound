@@ -1,5 +1,10 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 
+function gcEvent(name: string, title?: string) {
+  const track = (window as unknown as { __gcTrack?: (n: string, t?: string) => void }).__gcTrack;
+  if (typeof track === "function") track(name, title);
+}
+
 // A light client-side gate, not real security: the site is static, so anyone
 // who reads the bundle can still see the app. It keeps casual visitors out.
 // SHA-256 of the password (trimmed, lower-cased), so it isn't in the source.
@@ -44,12 +49,15 @@ export function MoundGate({ children }: { children: ReactNode }) {
         } catch {
           // Private mode without storage: still let them in for this visit.
         }
+        gcEvent("gate-success", "Password gate success");
         setState("open");
         return;
       }
+      gcEvent("gate-fail", "Password gate fail");
       setError("Not that one. Try again.");
       setValue("");
     } catch {
+      gcEvent("gate-fail", "Password gate fail");
       setError("This browser can't check the password. Try another browser.");
     } finally {
       setBusy(false);

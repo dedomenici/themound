@@ -261,7 +261,7 @@ export function MoundApp() {
           <ul className="mound-list">
             {saved.map((item) => (
               <li key={item.id}>
-                <button type="button" onClick={() => setProfile(item.id)}>
+                <button type="button" data-goat="bravo-open" data-goat-title="Open bravo" onClick={() => setProfile(item.id)}>
                   <strong>{item.name}</strong>
                   <span>{item.show}</span>
                   <em>Age {item.age}</em>
@@ -367,7 +367,7 @@ function Profile({ act, day = "tonight" }: { act: Act; day?: "tonight" | "tomorr
             The review
           </a>
           {act.instagram.map((url, i) => (
-            <a key={url} className="ig" href={url}>
+            <a key={url} className="ig" href={url} data-goat="external-instagram" data-goat-title="External: Instagram">
               {act.id === "plot" ? (i === 0 ? "Sophie on Instagram" : "Abby on Instagram") : "Instagram"}
             </a>
           ))}
